@@ -338,7 +338,7 @@ def quote(symbol):
                 ("最低", f"{q.get('low', 0):.2f}"),
                 ("成交量", f"{q.get('volume', 0):,.0f}"),
                 ("成交额", f"{q.get('amount', 0)/1e8:.2f}亿"),
-                ("量比", f"{q.get('volume_ratio', 0):.2f}"),
+                ("量比", (lambda vr: f"{vr:.2f}" if isinstance(vr, (int, float)) else "-")(q.get('volume_ratio'))),
                 ("换手率", f"{q.get('turnover_rate', 0):.2f}%"),
                 ("PE-TTM", f"{q.get('pe_ttm', '-')}"),
                 ("PB", f"{q.get('pb', '-')}"),

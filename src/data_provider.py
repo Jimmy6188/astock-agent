@@ -215,41 +215,8 @@ def _fetch_tencent_qq_kline(symbol: str, period: str = "daily",
                             start_date: Optional[str] = None,
                             end_date: Optional[str] = None,
                             adjust: str = "qfq") -> pd.DataFrame:
-    """从腾讯fqkline接口获取历史K线(快速备选,~1s)
-
-    仅支持个股(非ETF), 返回全量近2年数据
-    """
-    try:
-        s6 = str(symbol).zfill(6)
-        code = "sh" + s6 if s6.startswith(("6", "9")) else "sz" + s6
-        url = f"https://proxy.finance.qq.com/ifzqgtimg/appstock/app/fqkline/get?param={code},{period},,,,1000,qfq"
-        r = requests.get(url, headers=_get_req_headers(), timeout=10)
-        data = r.json()
-        if data.get("code") != 0 or not data.get("data"):
-            return pd.DataFrame()
-        key = list(data["data"].keys())[0]
-        rows = data["data"][key].get("qfqday", [])
-        if not rows:
-            return pd.DataFrame()
-        df = pd.DataFrame(rows, columns=["date", "open", "high", "low", "close", "volume"])
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
-        for c in ["open", "high", "low", "close", "volume"]:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
-        df = df.dropna(subset=["date", "close"])
-        # 按日期过滤
-        if start_date:
-            sd = pd.to_datetime(start_date, format="%Y%m%d", errors="coerce")
-            if pd.notna(sd):
-                df = df[df["date"] >= sd]
-        if end_date:
-            ed = pd.to_datetime(end_date, format="%Y%m%d", errors="coerce")
-            if pd.notna(ed):
-                df = df[df["date"] <= ed]
-        df = df.sort_values("date").reset_index(drop=True)
-        return df
-    except Exception as e:
-        logger.warning(f"Tencent fqkline K线失败 {symbol}: {e}")
-        return pd.DataFrame()
+    """腾讯fqkline接口已废弃(API返回bad params)，保留占位不执行"""
+    return pd.DataFrame()
 
 
 # ============================================================
@@ -427,7 +394,7 @@ class AStockDataProvider:
                     "low": float(r.get("low", 0)),
                     "open": float(r.get("today_open", 0)),
                     "pre_close": float(r.get("pre_close", 0)),
-                    "volume_ratio": float(r.get("volume_ratio", 0)),
+                    "volume_ratio": None,   # 腾讯接口未提供量比字段，由降级路径补充
                     "turnover_rate": float(r.get("turnover_rate", 0)),
                     "pe_ttm": float(r.get("pe_ttm", 0)) if r.get("pe_ttm", 0) else None,
                     "pb": float(r.get("pb", 0)) if r.get("pb", 0) else None,
@@ -557,48 +524,49 @@ class AStockDataProvider:
 
         symbol_6 = str(symbol).zfill(6)
 
-        # 1. Baostock(主)
-        try:
-            df = _fetch_bs_kline(symbol_6, period, start_date, end_date, adjust)
-            if df is not None and not df.empty:
-                self._set_cache(cache_key, df)
-                _record_source("baostock", note=f"{symbol_6}K线-Baostock")
-                return df
-        except Exception as e:
-            logger.warning(f"Baostock K线失败 {symbol_6}: {e}")
+        # 1. Baostock(主) - 3次重试
+        for attempt in range(3):
+            try:
+                df = _fetch_bs_kline(symbol_6, period, start_date, end_date, adjust)
+                if df is not None and not df.empty:
+                    self._set_cache(cache_key, df)
+                    _record_source("baostock", note=f"{symbol_6}K线-Baostock")
+                    return df
+                if attempt < 2:
+                    logger.warning(f"Baostock第{attempt+1}次重试 {symbol_6}")
+                    time.sleep(1 + attempt)
+            except Exception as e:
+                logger.warning(f"Baostock K线失败 {symbol_6} (attempt {attempt+1}/3): {e}")
+                if attempt < 2:
+                    time.sleep(1 + attempt)
 
-        # 2. 腾讯fqkline(快速备选,~1s,仅个股)
-        try:
-            df = _fetch_tencent_qq_kline(symbol_6, period, start_date, end_date, adjust)
-            if df is not None and not df.empty:
-                self._set_cache(cache_key, df)
-                _record_source("tencent", note=f"{symbol_6}K线-腾讯fqkline")
-                return df
-        except Exception as e:
-            logger.warning(f"Tencent fqkline K线失败 {symbol_6}: {e}")
-
-        # 3. 降级到 AKShare
-        try:
-            df = ak.stock_zh_a_hist(
-                symbol=symbol_6, period=period,
-                start_date=start_date, end_date=end_date, adjust=adjust,
-            )
-            if df is not None and not df.empty:
-                col_map = {
-                    "日期": "date", "开盘": "open", "收盘": "close",
-                    "最高": "high", "最低": "low", "成交量": "volume",
-                    "成交额": "amount", "振幅": "amplitude",
-                    "涨跌幅": "pct_change", "涨跌额": "change_amt",
-                    "换手率": "turnover",
-                }
-                existing = {c for c in df.columns if c in col_map}
-                df = df.rename(columns={c: col_map[c] for c in existing})
-                self._set_cache(cache_key, df)
-                _record_source("akshare", fallback=True, note=f"{symbol_6}K线-AKShare降级(Baostock失败)")
-                return df
-        except Exception as e:
-            logger.error(f"获取 {symbol_6} K线失败: {e}")
-            _record_source("error", fallback=True, note=f"{symbol_6}K线-Baostock+Tencent+AKShare均失败: {e}")
+        # 2. AKShare(降级) - 3次重试
+        for attempt in range(3):
+            try:
+                df = ak.stock_zh_a_hist(
+                    symbol=symbol_6, period=period,
+                    start_date=start_date, end_date=end_date, adjust=adjust,
+                )
+                if df is not None and not df.empty:
+                    col_map = {
+                        "日期": "date", "开盘": "open", "收盘": "close",
+                        "最高": "high", "最低": "low", "成交量": "volume",
+                        "成交额": "amount", "振幅": "amplitude",
+                        "涨跌幅": "pct_change", "涨跌额": "change_amt",
+                        "换手率": "turnover",
+                    }
+                    existing = {c for c in df.columns if c in col_map}
+                    df = df.rename(columns={c: col_map[c] for c in existing})
+                    self._set_cache(cache_key, df)
+                    _record_source("akshare", fallback=True, note=f"{symbol_6}K线-AKShare降级(Baostock失败)")
+                    return df
+                if attempt < 2:
+                    logger.warning(f"AKShare第{attempt+1}次重试 {symbol_6}")
+                    time.sleep(2 + attempt * 2)
+            except Exception as e:
+                logger.warning(f"AKShare K线失败 {symbol_6} (attempt {attempt+1}/3): {e}")
+                if attempt < 2:
+                    time.sleep(2 + attempt * 2)
 
         return pd.DataFrame()
 
@@ -960,13 +928,9 @@ class AStockDataProvider:
             df = df[mask].sort_values("涨跌幅", ascending=False)
 
             # ---- 第2轮：剔除不满一年新股 ----
-            # 批量查询历史K线以判断上市日期，避免每只股票单独请求的N+1问题
+            # 逐股查询K线长度判断上市时间（Baostock主 + AKShare备，带限流）
             all_valid_symbols: set = set()
             try:
-                # 一次批量获取历史数据（AKShare按市场批量查询）
-                hist_all = ak.stock_zh_a_hist(symbol="sh000001", period="daily",
-                                               start_date="20190101", adjust="")
-                # 用单只股票批量查询所有代码
                 candidates = df["代码"].astype(str).tolist()
                 batch_size = 50
                 for i in range(0, len(candidates), batch_size):

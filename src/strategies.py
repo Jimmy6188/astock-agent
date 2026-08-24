@@ -338,22 +338,26 @@ class GridTradingStrategy(BaseStrategy):
         df = kline_df.copy()
         close = df["close"].astype(float)
 
-        # 以近60日均价为基准
-        base_price = close.iloc[-60:].mean() if len(close) >= 60 else close.mean()
+        # 以滚动近60日均价为基准（逐bar计算，避免前视偏差）
+        if len(close) >= 60:
+            base_series = close.rolling(60).mean()
+        else:
+            base_series = pd.Series(close.mean(), index=close.index)
 
-        df["base_price"] = base_price
-        df["price_ratio"] = (close - base_price) / base_price
+        df["base_price"] = base_series
+        df["price_ratio"] = (close - base_series) / base_series
 
-        # 计算当前所在网格层级
-        df["grid_level"] = (df["price_ratio"] / self.grid_size).round(0).astype(int)
+        # 计算当前所在网格层级（预热期基准为NaN，层级置0即HOLD）
+        df["grid_level"] = (df["price_ratio"] / self.grid_size).round(0).fillna(0).astype(int)
 
         # 触及网格线时产生信号
         df["grid_level_prev"] = df["grid_level"].shift(1)
         level_changed = df["grid_level"] != df["grid_level_prev"]
 
+        warmup_mask = base_series.notna()             # 预热期不产生信号
         conditions = [
-            level_changed & (df["grid_level"] <= -2),      # 下跌触及买入网格
-            level_changed & (df["grid_level"] >= 2),       # 上涨触及卖出网格
+            level_changed & (df["grid_level"] <= -2) & warmup_mask,      # 下跌触及买入网格
+            level_changed & (df["grid_level"] >= 2) & warmup_mask,       # 上涨触及卖出网格
             (df["grid_level"] <= -3),                       # 深跌加仓区
             (df["grid_level"] >= 3),                        # 大涨减仓区
         ]

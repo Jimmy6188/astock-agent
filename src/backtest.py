@@ -9,6 +9,11 @@ from typing import Optional, List, Dict
 from dataclasses import dataclass, field
 from datetime import datetime
 
+try:
+    from .strategies import STRATEGY_REGISTRY, get_strategy
+except ImportError:  # 直接以脚本方式运行 src/ 目录时
+    from strategies import STRATEGY_REGISTRY, get_strategy
+
 
 @dataclass
 class TradeRecord:
@@ -320,8 +325,6 @@ def run_multi_strategy_backtest(
     Returns:
         各策略回测结果列表
     """
-    from strategies import STRATEGY_REGISTRY, get_strategy
-
     if strategies is None:
         strategies = list(STRATEGY_REGISTRY.keys())
 
