@@ -18,6 +18,11 @@ MCP Server - A股智能分析工具的Agent接口层
   get_sector_data   - 行业板块数据
 """
 
+# 编码修复：确保stdout使用UTF-8，避免中文乱码
+import sys
+if sys.stdout.encoding and 'utf' not in sys.stdout.encoding.lower():
+    sys.stdout.reconfigure(encoding='utf-8')
+
 import asyncio
 import json
 import logging
@@ -25,11 +30,23 @@ from typing import Any, Optional
 from mcp.server import Server
 from mcp.types import Tool, TextContent
 
-# 导入核心模块
-from .data_provider import AStockDataProvider, get_provider, set_meta_recorder
-from .analyzer import StockAnalyzer
-from .strategies import STRATEGY_REGISTRY, get_strategy
-from .backtest import BacktestEngine, run_multi_strategy_backtest, format_backtest_report
+# 导入核心模块（兼容脚本模式和模块模式）
+try:
+    from .data_provider import AStockDataProvider, get_provider, set_meta_recorder
+except ImportError:
+    from data_provider import AStockDataProvider, get_provider, set_meta_recorder
+try:
+    from .analyzer import StockAnalyzer
+except ImportError:
+    from analyzer import StockAnalyzer
+try:
+    from .strategies import STRATEGY_REGISTRY, get_strategy
+except ImportError:
+    from strategies import STRATEGY_REGISTRY, get_strategy
+try:
+    from .backtest import BacktestEngine, run_multi_strategy_backtest, format_backtest_report
+except ImportError:
+    from backtest import BacktestEngine, run_multi_strategy_backtest, format_backtest_report
 
 logger = logging.getLogger(__name__)
 
@@ -525,7 +542,13 @@ async def _track_portfolio(holdings: list) -> dict:
     total_value = 0
     total_pnl = 0
 
-    from position_analyzer import PositionAnalyzer
+    try:
+        from position_analyzer import PositionAnalyzer
+    except ImportError:
+        try:
+            from .position_analyzer import PositionAnalyzer
+        except ImportError:
+            from position_analyzer import PositionAnalyzer
     pa = PositionAnalyzer()
 
     for h in holdings:
